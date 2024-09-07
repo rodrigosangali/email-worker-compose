@@ -1,28 +1,38 @@
 import psycopg2
-from bottle import route, run, request
+import redis
+import json
+from bottle import Bottle, request
 
-DSN = 'dbname=email_sender user=postgres password=postgres host=db'
-SQL = 'INSERT INTO emails (assunto, mensagem) VALUES (%s, %s)'
 
-def register_message(assunto, mensagem):
-    conn = psycopg2.connect(DSN)
-    cur = conn.cursor()
-    cur.execute(SQL, (assunto, mensagem))
-    conn.commit()
-    cur.close()
-    conn.close()
+class Sender(Bottle):
+    def __init__(self):
+        super().__init__()
+        self.route('/', method='POST', callback=self.send)
+        self.fila = redis.StrictRedis(host='queue', port=6379, db=0)
+        DSN = 'dbname=email_sender user=postgres password=postgres host=db'
+        self.conn = psycopg2.connect(DSN)
 
-    print('Mensagem registrada !')
+    def register_message(self, assunto, mensagem):
+        SQL = 'INSERT INTO emails (assunto, mensagem) VALUES (%s, %s)'
+        cur = self.conn.cursor()
+        cur.execute(SQL, (assunto, mensagem))
+        self.conn.commit()
+        cur.close()
 
-#atende a rota raiz para o metodo post
-@route('/', method='POST')
-def send():
-    assunto = request.forms.get('assunto')
-    mensagem = request.forms.get('mensagem')
-    register_message(assunto, mensagem)
-    return 'Mensagem enfileirada ! Assunto: {} Mensagem {}'.format(assunto, mensagem)
+        msg = {'assunto': assunto, 'mensagem':mensagem}
+        self.fila.rpush('sender', json.dumps(msg))  # sender é o nome da fila
+
+        print('Mensagem registrada !')
+
+    def send(self):
+        assunto = request.forms.get('assunto')
+        mensagem = request.forms.get('mensagem')
+        self.register_message(assunto, mensagem)
+        return 'Mensagem enfileirada ! Assunto: {} Mensagem {}'.format(
+            assunto, mensagem)
 
 # verifica se é o arquivo principal
 if __name__ == '__main__':
+    sender = Sender()
     #disponibiliza o serviço(onde tem a action no html)
-    run(host='0.0.0.0', port=8080, debug=True)
+    sender.run(host='0.0.0.0', port=8080, debug=True)
